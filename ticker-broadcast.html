@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NWS Broadcast Alert Ticker</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Roboto+Condensed:wght@400;700&display=swap');
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    background: transparent;
+    overflow: hidden;
+    width: 1920px;
+    height: 130px;
+  }
+
+  /* ── DEBUG BAR ── */
+  #debug-bar {
+    position: fixed; top: 0; left: 0; width: 1920px; height: 30px;
+    background: rgba(0,0,0,0.95); color: #aaa;
+    font: 11px/30px 'Courier New', monospace;
+    display: flex; align-items: center; z-index: 999;
+  }
+  .db-cell {
+    padding: 0 12px; border-right: 1px solid #222;
+    white-space: nowrap; height: 100%;
+    display: flex; align-items: center; gap: 5px; flex-shrink: 0;
+  }
+  .db-cell b { color: #fff; }
+  #dbg-status { font-weight: bold; color: #fa0; }
+  #dbg-status.ok  { color: #0f0; }
+  #dbg-status.err { color: #f44; }
+  #dbg-alerts {
+    color: #7af; font-size: 10px; flex: 1;
+    padding: 0 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .db-btn {
+    flex-shrink: 0; margin: 0 3px;
+    background: #111; border: 1px solid #444; color: #ccc;
+    font: 11px 'Courier New', monospace; padding: 2px 10px;
+    cursor: pointer; border-radius: 2px;
+  }
+  .db-btn:hover { background: #333; color: #fff; }
+  .db-btn.red { border-color: #833; color: #f88; }
+  .db-btn.red:hover { background: #f44; color: #fff; border-color: #f44; }
+
+  /* ══════════════════════════════════════
+     BROADCAST TICKER
+  ══════════════════════════════════════ */
+  #ticker-wrap {
+    position: fixed;
+    bottom: 0; left: 0;
+    width: 1920px;
+    height: 72px;
+    display: flex;
+    align-items: stretch;
+    opacity: 0;
+    transform: translateY(72px);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    font-family: 'Oswald', sans-serif;
+  }
+  #ticker-wrap.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── LEFT: Severity badge block ── */
+  #badge-block {
+    flex-shrink: 0;
+    width: 220px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    position: relative;
+    z-index: 2;
+    overflow: hidden;
+  }
+
+  /* Top strip — thin colored accent line */
+  #badge-accent {
+    height: 5px;
+    flex-shrink: 0;
+  }
+
+  /* Main badge area */
+  #badge-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 16px;
+    gap: 2px;
+    position: relative;
+  }
+
+  /* Diagonal cut on right edge */
+  #badge-main::after {
+    content: '';
+    position: absolute;
+    right: -18px; top: 0; bottom: 0;
+    width: 36px;
+    background: inherit;
+    clip-path: polygon(0 0, 50% 0, 100% 50%, 50% 100%, 0 100%);
+    z-index: 1;
+  }
+
+  #badge-icon {
+    font-size: 26px;
+    line-height: 1;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+  }
+  #badge-label {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  #badge-sublabel {
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.7;
+    line-height: 1;
+  }
+
+  /* ── CENTER: Scrolling text ── */
+  #scroll-block {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    position: relative;
+  }
+
+  /* Thin top bar above text */
+  #scroll-topbar {
+    height: 5px;
+    flex-shrink: 0;
+  }
+
+  #scroll-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding-left: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Subtle left fade mask */
+  #scroll-body::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 40px;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  #ticker-track {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    will-change: transform;
+  }
+
+  .ticker-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-right: 100px;
+  }
+
+  .t-event {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.75;
+    font-family: 'Roboto Condensed', sans-serif;
+  }
+
+  .t-divider {
+    font-size: 18px;
+    opacity: 0.3;
+    font-weight: 300;
+  }
+
+  .t-text {
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+
+  .ticker-sep {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 100px;
+    opacity: 0.4;
+  }
+  .ticker-sep span {
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+  }
+
+  /* ── RIGHT: Time + alert count block ── */
+  #meta-block {
+    flex-shrink: 0;
+    width: 130px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #meta-accent {
+    height: 5px;
+    flex-shrink: 0;
+  }
+
+  #meta-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border-left: 1px solid rgba(255,255,255,0.08);
+    padding: 0 12px;
+  }
+
+  #meta-time {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
+
+  #meta-count {
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.55;
+    font-family: 'Roboto Condensed', sans-serif;
+  }
+
+  /* ══ SEVERITY THEMES ══════════════════════════════════════════ */
+
+  /* EXTREME — deep crimson, pulsing */
+  .sev-extreme #badge-accent,
+  .sev-extreme #scroll-topbar,
+  .sev-extreme #meta-accent    { background: #ff1a2e; }
+  .sev-extreme #badge-main     { background: #c0001a; color: #fff; animation: pulse-badge 1s ease-in-out infinite; }
+  .sev-extreme #badge-main::after { background: #c0001a; }
+  .sev-extreme #scroll-body    { background: #0f0005; color: #ffd0d5; }
+  .sev-extreme #scroll-body::before { background: linear-gradient(to right, #0f0005, transparent); }
+  .sev-extreme #scroll-topbar  { background: #ff1a2e; }
+  .sev-extreme #meta-body      { background: #0f0005; color: #ffd0d5; }
+  .sev-extreme .t-event        { color: #ff6070; }
+  .sev-extreme .ticker-sep span{ background: #ff1a2e; }
+
+  /* SEVERE — deep amber-orange */
+  .sev-severe #badge-accent,
+  .sev-severe #scroll-topbar,
+  .sev-severe #meta-accent     { background: #ff6b00; }
+  .sev-severe #badge-main      { background: #cc4400; color: #fff; }
+  .sev-severe #badge-main::after { background: #cc4400; }
+  .sev-severe #scroll-body     { background: #100600; color: #ffd4a8; }
+  .sev-severe #scroll-body::before { background: linear-gradient(to right, #100600, transparent); }
+  .sev-severe #meta-body       { background: #100600; color: #ffd4a8; }
+  .sev-severe .t-event         { color: #ff8833; }
+  .sev-severe .ticker-sep span { background: #ff6b00; }
+
+  /* MODERATE — TV-yellow on near-black */
+  .sev-moderate #badge-accent,
+  .sev-moderate #scroll-topbar,
+  .sev-moderate #meta-accent   { background: #f5c400; }
+  .sev-moderate #badge-main    { background: #b38c00; color: #0a0800; }
+  .sev-moderate #badge-main::after { background: #b38c00; }
+  .sev-moderate #scroll-body   { background: #0d0c00; color: #fff4a8; }
+  .sev-moderate #scroll-body::before { background: linear-gradient(to right, #0d0c00, transparent); }
+  .sev-moderate #meta-body     { background: #0d0c00; color: #fff4a8; }
+  .sev-moderate .t-event       { color: #f5c400; }
+  .sev-moderate .ticker-sep span { background: #f5c400; }
+
+  /* MINOR — broadcast blue */
+  .sev-minor #badge-accent,
+  .sev-minor #scroll-topbar,
+  .sev-minor #meta-accent      { background: #0d6efd; }
+  .sev-minor #badge-main       { background: #0a4bbf; color: #fff; }
+  .sev-minor #badge-main::after { background: #0a4bbf; }
+  .sev-minor #scroll-body      { background: #00040f; color: #b8d4ff; }
+  .sev-minor #scroll-body::before { background: linear-gradient(to right, #00040f, transparent); }
+  .sev-minor #meta-body        { background: #00040f; color: #b8d4ff; }
+  .sev-minor .t-event          { color: #4d9fff; }
+  .sev-minor .ticker-sep span  { background: #0d6efd; }
+
+  /* UNKNOWN — charcoal */
+  .sev-unknown #badge-accent,
+  .sev-unknown #scroll-topbar,
+  .sev-unknown #meta-accent    { background: #555; }
+  .sev-unknown #badge-main     { background: #2a2a2a; color: #fff; }
+  .sev-unknown #badge-main::after { background: #2a2a2a; }
+  .sev-unknown #scroll-body    { background: #080808; color: #ccc; }
+  .sev-unknown #scroll-body::before { background: linear-gradient(to right, #080808, transparent); }
+  .sev-unknown #meta-body      { background: #080808; color: #ccc; }
+  .sev-unknown .t-event        { color: #888; }
+  .sev-unknown .ticker-sep span{ background: #555; }
+
+  @keyframes pulse-badge {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.6; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+  CONFIG
+
+  STATES          : State codes to monitor. ["IN"] = all Indiana.
+                    Add more: ["IN","IL"] for Indiana + Illinois.
+
+  FILTER_COUNTIES : Leave [] for statewide. Add zone/county codes
+                    to restrict to specific areas.
+                    e.g. ["INC089","INC127","INZ001"]
+
+  POLL_MS         : Refresh interval in ms. Min 30000.
+  SPEED_PX        : Scroll speed in pixels/second.
+  DEBUG           : true = show debug bar | false = clean stream.
+═══════════════════════════════════════════════════════════════ -->
+<script>
+const CONFIG = {
+  STATES          : ["IN"],
+  FILTER_COUNTIES : [],
+  POLL_MS         : 60000,
+  SPEED_PX        : 80,
+  DEBUG           : true
+};
+</script>
+
+<!-- Debug bar -->
+<div id="debug-bar">
+  <div class="db-cell">BROADCAST TICKER</div>
+  <div class="db-cell">STATE: <b id="dbg-state">-</b></div>
+  <div class="db-cell">STATUS: <span id="dbg-status">INIT</span></div>
+  <div class="db-cell">ALERTS: <b id="dbg-count">-</b></div>
+  <div class="db-cell">METHOD: <b id="dbg-method">-</b></div>
+  <div class="db-cell">POLL: <b id="dbg-time">-</b></div>
+  <div id="dbg-alerts">—</div>
+  <button class="db-btn" onclick="testAlert('moderate')">▶ WATCH</button>
+  <button class="db-btn" onclick="testAlert('severe')">▶ WARNING</button>
+  <button class="db-btn" onclick="testAlert('extreme')">▶ EMERGENCY</button>
+  <button class="db-btn red" onclick="clearTest()">✕ CLEAR</button>
+</div>
+
+<!-- Broadcast Ticker -->
+<div id="ticker-wrap" class="sev-unknown">
+
+  <!-- LEFT: Badge -->
+  <div id="badge-block">
+    <div id="badge-accent"></div>
+    <div id="badge-main">
+      <div id="badge-icon">⚠️</div>
+      <div id="badge-label">ALERT</div>
+      <div id="badge-sublabel">NWS</div>
+    </div>
+  </div>
+
+  <!-- CENTER: Scrolling text -->
+  <div id="scroll-block">
+    <div id="scroll-topbar"></div>
+    <div id="scroll-body">
+      <div id="ticker-track"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Time + count -->
+  <div id="meta-block">
+    <div id="meta-accent"></div>
+    <div id="meta-body">
+      <div id="meta-time">--:--</div>
+      <div id="meta-count">-- ALERTS</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── Severity ──────────────────────────────────────────────────────
+const SEV_META = {
+  extreme : { cls:'sev-extreme',  icon:'🌪',  label:'EMERGENCY', sub:'IMMEDIATE DANGER' },
+  severe  : { cls:'sev-severe',   icon:'⛈',  label:'WARNING',   sub:'NWS ALERT'        },
+  moderate: { cls:'sev-moderate', icon:'⚠️',  label:'WATCH',     sub:'NWS ALERT'        },
+  minor   : { cls:'sev-minor',    icon:'ℹ️',  label:'ADVISORY',  sub:'NWS ALERT'        },
+  unknown : { cls:'sev-unknown',  icon:'📡',  label:'STATEMENT', sub:'NWS ALERT'        }
+};
+const SEV_ORDER = ['extreme','severe','moderate','minor','unknown'];
+const SEV_KW = {
+  extreme : ['tornado warning','flash flood emergency','particularly dangerous situation','pds tornado'],
+  severe  : ['severe thunderstorm warning','flash flood warning','winter storm warning','blizzard warning',
+             'ice storm warning','high wind warning','hurricane warning','red flag warning','tornado watch'],
+  moderate: ['watch','wind advisory','freeze','frost advisory','dense fog','heat advisory',
+             'winter weather advisory','lake wind advisory','small craft','special weather statement',
+             'flood warning','flood advisory']
+};
+
+function classify(a) {
+  const combo = ((a.properties.event||'') + ' ' + (a.properties.headline||'')).toLowerCase();
+  for (const sev of ['extreme','severe','moderate'])
+    if (SEV_KW[sev].some(k => combo.includes(k))) return sev;
+  const raw = (a.properties.severity||'').toLowerCase();
+  return SEV_ORDER.includes(raw) ? raw : 'unknown';
+}
+function topSev(alerts) {
+  let best = 'unknown';
+  for (const a of alerts) { const s = classify(a); if (SEV_ORDER.indexOf(s) < SEV_ORDER.indexOf(best)) best = s; }
+  return best;
+}
+
+// ── Extract best text ─────────────────────────────────────────────
+function getAlertText(a) {
+  const p = a.properties;
+  const event    = (p.event || 'Weather Alert').toUpperCase();
+  const headline = (p.headline || '').trim();
+  const desc     = (p.description || '').trim();
+  const area     = (p.areaDesc || '').trim();
+  if (headline.length > 10) return { event, text: headline };
+  if (desc.length > 10) {
+    const first = desc.replace(/\n+/g,' ').split(/\.\s+/)[0].trim();
+    return { event, text: first + (first.endsWith('.') ? '' : '.') };
+  }
+  return { event, text: area || 'See local NWS for details.' };
+}
+
+// ── Debug ─────────────────────────────────────────────────────────
+function dbg(msg, cls, count, method, alertList) {
+  if (!CONFIG.DEBUG) return;
+  const el = document.getElementById('dbg-status');
+  el.textContent = msg; el.className = cls||'';
+  if (count !== undefined) document.getElementById('dbg-count').textContent = count;
+  if (method) document.getElementById('dbg-method').textContent = method;
+  document.getElementById('dbg-time').textContent =
+    new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  if (alertList !== undefined)
+    document.getElementById('dbg-alerts').textContent =
+      alertList.length ? alertList.map(a=>'['+( a.properties.event||'?')+']').join('  ') : '— no alerts —';
+}
+document.getElementById('dbg-state').textContent = CONFIG.STATES.join('+');
+if (!CONFIG.DEBUG) document.getElementById('debug-bar').style.display = 'none';
+
+// ── Ticker animation ──────────────────────────────────────────────
+let raf=null, rafStart=null, rafLoop=0;
+
+function buildTrack(alerts) {
+  const track = document.getElementById('ticker-track');
+  track.innerHTML = '';
+  for (let pass=0; pass<2; pass++) {
+    alerts.forEach((a, i) => {
+      const {event, text} = getAlertText(a);
+
+      const item = document.createElement('span');
+      item.className = 'ticker-item';
+
+      const evSpan = document.createElement('span');
+      evSpan.className = 't-event';
+      evSpan.textContent = event;
+
+      const divSpan = document.createElement('span');
+      divSpan.className = 't-divider';
+      divSpan.textContent = '|';
+
+      const txtSpan = document.createElement('span');
+      txtSpan.className = 't-text';
+      txtSpan.textContent = text;
+
+      item.appendChild(evSpan);
+      item.appendChild(divSpan);
+      item.appendChild(txtSpan);
+      track.appendChild(item);
+
+      if (i < alerts.length - 1 || pass === 0) {
+        const sep = document.createElement('span');
+        sep.className = 'ticker-sep';
+        sep.innerHTML = '<span></span><span></span><span></span>';
+        track.appendChild(sep);
+      }
+    });
+  }
+  track.getBoundingClientRect();
+  return track.scrollWidth / 2;
+}
+
+function startTicker(w) {
+  if (raf) cancelAnimationFrame(raf);
+  rafStart = null; rafLoop = Math.max(w, 1);
+  function step(ts) {
+    if (!rafStart) rafStart = ts;
+    const pos = ((ts - rafStart) / 1000 * CONFIG.SPEED_PX) % rafLoop;
+    document.getElementById('ticker-track').style.transform = `translateX(-${pos}px)`;
+    raf = requestAnimationFrame(step);
+  }
+  raf = requestAnimationFrame(step);
+}
+
+function showAlerts(alerts) {
+  const wrap = document.getElementById('ticker-wrap');
+  const sev  = topSev(alerts);
+  const meta = SEV_META[sev];
+
+  wrap.className = 'visible ' + meta.cls;
+  document.getElementById('badge-icon').textContent  = meta.icon;
+  document.getElementById('badge-label').textContent = meta.label;
+  document.getElementById('badge-sublabel').textContent = meta.sub;
+
+  const now = new Date();
+  document.getElementById('meta-time').textContent  = now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('meta-count').textContent = alerts.length + (alerts.length === 1 ? ' ALERT' : ' ALERTS');
+
+  setTimeout(() => startTicker(buildTrack(alerts)), 120);
+}
+
+function hideAlerts() {
+  document.getElementById('ticker-wrap').classList.remove('visible');
+  if (raf) { cancelAnimationFrame(raf); raf = null; }
+  dbg('NO ACTIVE ALERTS','',0,undefined,[]);
+}
+
+// ── Test alerts ───────────────────────────────────────────────────
+const TESTS = {
+  moderate:[{id:'T1',properties:{event:'Severe Thunderstorm Watch',headline:'Severe Thunderstorm Watch 102 in effect until 10:00 PM EDT. Damaging winds to 70 mph and large hail up to 2 inches possible across Northern and Central Indiana.',areaDesc:'Lake County IN; Porter County IN; LaPorte County IN',severity:'Moderate'}}],
+  severe:  [{id:'T1',properties:{event:'Severe Thunderstorm Watch',headline:'Severe Thunderstorm Watch 102 in effect until 10:00 PM EDT. Damaging winds and large hail.',areaDesc:'Lake IN; Porter IN',severity:'Severe'}},
+            {id:'T2',properties:{event:'Tornado Watch',headline:'Tornado Watch 199 in effect until 2:00 AM CDT. Conditions favorable for tornadoes across portions of Northern Indiana.',areaDesc:'Porter County IN',severity:'Severe'}}],
+  extreme: [{id:'T1',properties:{event:'Tornado Warning',headline:'TORNADO WARNING until 8:47 PM CDT. Radar-confirmed tornado located near Valparaiso moving northeast at 45 mph. TAKE SHELTER IMMEDIATELY.',areaDesc:'Porter County IN',severity:'Extreme'}},
+            {id:'T2',properties:{event:'Severe Thunderstorm Warning',headline:'Severe Thunderstorm Warning until 9:15 PM CDT. 70 mph winds and golf ball sized hail.',areaDesc:'Lake County IN',severity:'Severe'}}]
+};
+function testAlert(l) { showAlerts(TESTS[l]); dbg('TEST:'+l.toUpperCase(),'ok',TESTS[l].length,'MANUAL',TESTS[l]); }
+function clearTest() { hideAlerts(); }
+
+// ── NWS state-level fetch ─────────────────────────────────────────
+const PROXY1 = 'https://corsproxy.io/?';
+const PROXY2 = 'https://api.allorigins.win/get?url=';
+let lastMethod = null;
+
+async function fetchStateAlerts(state) {
+  const url = `https://api.weather.gov/alerts/active?area=${state}`;
+  const methods = [
+    ['DIRECT', async () => {
+      const r = await fetch(url, {headers:{'Accept':'application/geo+json','User-Agent':'OBS-BroadcastTicker/1.0'}});
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      return (await r.json()).features || [];
+    }],
+    ['PROXY1', async () => {
+      const r = await fetch(PROXY1 + encodeURIComponent(url));
+      if (!r.ok) throw new Error('P1 '+r.status);
+      return (await r.json()).features || [];
+    }],
+    ['PROXY2', async () => {
+      const r = await fetch(PROXY2 + encodeURIComponent(url));
+      if (!r.ok) throw new Error('P2 '+r.status);
+      const outer = await r.json();
+      return JSON.parse(outer.contents).features || [];
+    }]
+  ];
+
+  const ordered = lastMethod
+    ? [methods.find(m=>m[0]===lastMethod), ...methods.filter(m=>m[0]!==lastMethod)].filter(Boolean)
+    : methods;
+
+  for (const [name, fn] of ordered) {
+    try {
+      const results = await fn();
+      lastMethod = name;
+      return { results, method: name };
+    } catch(e) { /* try next */ }
+  }
+  return { results: [], method: 'FAILED' };
+}
+
+async function poll() {
+  dbg('POLLING...','');
+  try {
+    let all = [];
+    for (const state of CONFIG.STATES) {
+      const {results, method} = await fetchStateAlerts(state);
+      dbg('OK','ok', undefined, method);
+      all = all.concat(results);
+    }
+
+    // Deduplicate
+    const seen = new Set();
+    all = all.filter(a => { if(seen.has(a.id)) return false; seen.add(a.id); return true; });
+
+    // Optional county filter
+    if (CONFIG.FILTER_COUNTIES.length > 0) {
+      all = all.filter(a => {
+        const zones = (a.properties.affectedZones||[]).map(z=>z.split('/').pop());
+        return CONFIG.FILTER_COUNTIES.some(f=>zones.includes(f));
+      });
+    }
+
+    // Skip test/exercise status alerts
+    all = all.filter(a => !['test','exercise'].includes((a.properties.status||'').toLowerCase()));
+
+    dbg('OK','ok', all.length, lastMethod, all);
+
+    if (all.length > 0) showAlerts(all);
+    else hideAlerts();
+  } catch(e) {
+    dbg('ERROR','err','-',null,[]);
+  }
+}
+
+poll();
+setInterval(poll, CONFIG.POLL_MS);
+</script>
+</body>
+</html>
